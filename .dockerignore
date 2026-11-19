@@ -1,9 +1,0 @@
-**/.git
-**/.github
-**/.vs
-**/bin
-**/obj
-**/tests
-**/*.user
-**/*.md
-hosting

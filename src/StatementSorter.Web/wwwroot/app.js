@@ -89,12 +89,52 @@ drop.addEventListener("dragleave", (event) => {
   if (!drop.contains(event.relatedTarget)) drop.classList.remove("hot");
 });
 
+let sorterPromise = null;
+
+function readySorter() {
+  if (!sorterPromise) {
+    sorterPromise = import("/_framework/dotnet.js").then(async ({ dotnet }) => {
+      const api = await dotnet.create();
+      const exports = await api.getAssemblyExports(api.getConfig().mainAssemblyName);
+      const sorter = exports.StatementSorter.Wasm.SorterExports;
+      if (!sorter || typeof sorter.SortCsv !== "function") throw new Error("The sorter runtime is missing.");
+      return sorter;
+    }).catch((err) => {
+      sorterPromise = null;
+      throw err;
+    });
+  }
+  return sorterPromise;
+}
+
+async function sortCsv(text) {
+  try {
+    const sorter = await readySorter();
+    const payload = JSON.parse(sorter.SortCsv(text));
+    if (payload && payload.error && !payload.transactions) {
+      return { ok: false, error: payload.error };
+    }
+    return { ok: true, payload };
+  } catch {
+    return null;
+  }
+}
+
 async function loadSample(url, name, role) {
   setBusy(true);
   try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error("The sample statement didn't load.");
-    const text = await response.text();
+    let text = "";
+    try {
+      const response = await fetch(url);
+      if (response.ok) text = await response.text();
+    } catch {
+      text = "";
+    }
+    if (!text || text.trim().startsWith("<")) {
+      const sorter = await readySorter();
+      text = sorter.SampleCsv(name);
+    }
+    if (!text) throw new Error("The sample statement didn't load.");
     const file = new File([text], name, { type: "text/csv" });
     await sortFile(file, { alreadyBusy: true, role: role === "previous" && !current ? "current" : role });
   } catch (err) {
@@ -109,13 +149,23 @@ async function sortFile(file, options = {}) {
   const role = options.role || "current";
 
   try {
-    const body = new FormData();
-    body.append("file", file, file.name);
-    const response = await fetch("/api/sort", { method: "POST", body });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      showError((payload && payload.error) || "Couldn't read that file.");
+    const text = await file.text();
+    const sorted = await sortCsv(text);
+    let payload = sorted && sorted.ok ? sorted.payload : null;
+    if (sorted && !sorted.ok) {
+      showError(sorted.error || "Couldn't read that file.");
       return;
+    }
+
+    if (!payload) {
+      const body = new FormData();
+      body.append("file", file, file.name);
+      const response = await fetch("/api/sort", { method: "POST", body });
+      payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        showError((payload && payload.error) || "Couldn't read that file.");
+        return;
+      }
     }
 
     payload.fileName = file.name;

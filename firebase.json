@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "public": "hosting",
+    "public": "dist",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -9,10 +9,7 @@
     "rewrites": [
       {
         "source": "**",
-        "run": {
-          "serviceId": "statement-sorter",
-          "region": "us-central1"
-        }
+        "destination": "/index.html"
       }
     ]
   }

@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Firebase hosting output
+dist/
+
 # User-specific files
 *.rsuser
 *.suo
