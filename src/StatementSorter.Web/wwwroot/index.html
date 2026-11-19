@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Statement Sorter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,650&family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <header class="mast">
+      <p class="mark">Statement Sorter</p>
+      <h1>See which habits to change.</h1>
+      <p class="lede">
+        Drop in a bank CSV. Set a monthly cap, compare it with an earlier export, and see how one savings total covers your goals in priority order.
+      </p>
+    </header>
+
+    <div id="drop" class="drop">
+      <p class="drop-kicker">CSV</p>
+      <p class="drop-title">Drop a statement here</p>
+      <p class="drop-hint">Dates are read as month/day/year, unless the first number is greater than 12.</p>
+      <div class="actions">
+        <button type="button" id="browse" class="primary">Choose a CSV</button>
+        <button type="button" id="sample" class="ghost">Try the sample statement</button>
+        <button type="button" id="compare-browse" class="ghost">Add an earlier CSV</button>
+        <button type="button" id="compare-sample" class="ghost">Add the earlier sample</button>
+      </div>
+      <input id="file" type="file" accept=".csv,.txt,text/csv,text/plain" tabindex="-1" aria-hidden="true" />
+      <input id="compare-file" type="file" accept=".csv,.txt,text/csv,text/plain" tabindex="-1" aria-hidden="true" />
+    </div>
+
+    <p id="error" class="error" role="alert" hidden></p>
+
+    <section id="results" class="results" hidden aria-live="polite">
+      <div class="results-head">
+        <div>
+          <p id="file-name" class="file-name"></p>
+          <h2 id="date-span"></h2>
+        </div>
+        <button type="button" id="reset" class="ghost">Clear</button>
+      </div>
+
+      <div class="stats">
+        <article>
+          <span>Spent</span>
+          <strong id="spent"></strong>
+          <p>Purchases, bills, and fees</p>
+        </article>
+        <article>
+          <span>Received</span>
+          <strong id="received"></strong>
+          <p>Paychecks and refunds</p>
+        </article>
+        <article>
+          <span>Left over</span>
+          <strong id="leftover"></strong>
+          <p>Income minus spending</p>
+        </article>
+        <article>
+          <span>Set aside</span>
+          <strong id="aside"></strong>
+          <p id="aside-note">Duplicates and bad rows</p>
+        </article>
+      </div>
+
+      <section class="insights" aria-labelledby="insight-heading">
+        <h3 id="insight-heading">Worth adjusting</h3>
+        <div id="insights" class="insight-grid"></div>
+      </section>
+
+      <section id="compare-section" class="compare" hidden>
+        <div class="compare-head">
+          <h3>Since the earlier statement</h3>
+          <button type="button" id="compare-clear" class="text-btn">Remove</button>
+        </div>
+        <p id="compare-range"></p>
+        <p id="compare-overall"></p>
+        <ul id="compare-list"></ul>
+      </section>
+
+      <div class="layout">
+        <div>
+          <h3>Categories</h3>
+          <div id="categories" class="categories"></div>
+        </div>
+        <div>
+          <h3>Transactions <span id="txn-count"></span></h3>
+          <div class="table-wrap">
+            <table>
+              <caption class="sr-only">Sorted transactions</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Description</th>
+                  <th scope="col">Category</th>
+                  <th scope="col" class="num">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="transactions"></tbody>
+            </table>
+          </div>
+          <p id="empty-table" class="empty" hidden>Nothing in that category.</p>
+        </div>
+      </div>
+
+      <section id="issue-section" class="aside-block" hidden>
+        <h3>Rows set aside</h3>
+        <ul id="issues"></ul>
+      </section>
+
+      <section id="dup-section" class="aside-block" hidden>
+        <h3>Duplicates skipped</h3>
+        <ul id="dups"></ul>
+      </section>
+    </section>
+
+    <section id="savings" class="savings" aria-labelledby="savings-heading">
+      <div class="savings-intro">
+        <h2 id="savings-heading">Saving for</h2>
+        <p>One amount is shared by every goal. The highest priority is funded first, then the next. The time estimate uses the leftover from the loaded statement, and gets shorter when a category is over its cap.</p>
+      </div>
+      <div class="savings-pool">
+        <label for="savings-total">Already saved</label>
+        <input id="savings-total" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" aria-describedby="savings-hint" />
+        <p id="savings-hint">This total is shared. It is not split evenly.</p>
+        <p id="savings-left" hidden></p>
+        <p id="savings-error" class="error" hidden></p>
+      </div>
+      <form id="goal-form" class="goal-form">
+        <label>
+          What you're saving for
+          <input id="goal-name" name="name" type="text" maxlength="80" required autocomplete="off" />
+        </label>
+        <label>
+          Amount
+          <input id="goal-amount" name="amount" type="text" inputmode="decimal" required autocomplete="off" placeholder="0.00" />
+        </label>
+        <label class="note-field">
+          Note
+          <textarea id="goal-note" name="note" maxlength="500" rows="3" placeholder="Why this matters, or what has to happen first."></textarea>
+        </label>
+        <div class="actions">
+          <button type="submit" id="goal-save" class="primary">Add goal</button>
+          <button type="button" id="goal-cancel" class="ghost" hidden>Cancel</button>
+        </div>
+      </form>
+      <p id="goal-error" class="error" hidden></p>
+      <div id="goals" class="goals"></div>
+      <p id="goals-empty" class="empty">No goals yet. Add one and keep a note about why you're saving.</p>
+    </section>
+
+    <footer class="colophon">
+      <p>No account. The statement is only used for this summary. Savings notes stay in this browser.</p>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

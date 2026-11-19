@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/StatementSorter.Core/StatementSorter.Core.csproj" />
+    <Project Path="src/StatementSorter.Web/StatementSorter.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/StatementSorter.Tests/StatementSorter.Tests.csproj" />
+  </Folder>
+</Solution>
