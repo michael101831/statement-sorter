@@ -14,11 +14,14 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   </head>
   <body>
+    <div class="account-bar">
+      <div id="account-area" class="account-area"></div>
+    </div>
     <header class="mast">
       <p class="mark">Statement Sorter</p>
       <h1>See which habits to change.</h1>
       <p class="lede">
-        Drop in a bank CSV. Set a monthly cap, compare it with an earlier export, and see how one savings total covers your goals in priority order.
+        Drop in a bank CSV. Set a monthly cap, mark a one-off, compare it with an earlier export, and see how one savings total covers your goals in priority order.
       </p>
     </header>
 
@@ -82,7 +85,10 @@
         </div>
         <p id="compare-range"></p>
         <p id="compare-overall"></p>
-        <ul id="compare-list"></ul>
+        <ul id="compare-list" class="change-list"></ul>
+        <h3 id="repeat-heading" class="repeat-heading" hidden>Same charge both months</h3>
+        <ul id="repeat-list" class="change-list" hidden></ul>
+        <p id="repeat-empty" hidden>No charge came back for about the same amount.</p>
       </section>
 
       <div class="layout">
@@ -92,6 +98,7 @@
         </div>
         <div>
           <h3>Transactions <span id="txn-count"></span></h3>
+          <p class="table-note">Mark a charge as a one-off to keep it in this total and leave it out of the pace, the caps, and the goal date.</p>
           <div class="table-wrap">
             <table>
               <caption class="sr-only">Sorted transactions</caption>
@@ -124,7 +131,7 @@
     <section id="savings" class="savings" aria-labelledby="savings-heading">
       <div class="savings-intro">
         <h2 id="savings-heading">Saving for</h2>
-        <p>One amount is shared by every goal. The highest priority is funded first, then the next. The time estimate uses the leftover from the loaded statement, and gets shorter when a category is over its cap.</p>
+        <p>One amount is shared by every goal. The highest priority is funded first, then the next. The time estimate uses the leftover from the loaded statement, leaves one-offs out, and gets shorter when a category is over its cap. The date starts from the end of that statement.</p>
       </div>
       <div class="savings-pool">
         <label for="savings-total">Already saved</label>
@@ -157,9 +164,39 @@
     </section>
 
     <footer class="colophon">
-      <p>No account. The statement is only used for this summary. Savings notes stay in this browser.</p>
+      <p>The statement is only used for this summary. Sign in and your caps, one-offs, and goals stay with the account. Signed out, they stay in this browser.</p>
     </footer>
 
+    <div class="modal-backdrop" id="account-backdrop">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="account-title">
+        <h3 id="account-title">Sign in</h3>
+        <p id="account-desc">Sign in to keep your caps, one-offs, and savings goals with this account.</p>
+        <p id="account-modal-error" class="error" hidden></p>
+        <form id="account-form">
+          <label class="account-field" id="account-name-field" hidden>
+            Display name
+            <input id="account-name" type="text" maxlength="24" autocomplete="nickname" />
+          </label>
+          <label class="account-field">
+            Email
+            <input id="account-email" type="email" autocomplete="email" required />
+          </label>
+          <label class="account-field">
+            Password
+            <input id="account-password" type="password" autocomplete="current-password" required />
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="text-btn" id="account-toggle">Need an account?</button>
+            <div class="modal-submit">
+              <button type="button" class="ghost" id="account-cancel">Cancel</button>
+              <button type="submit" class="primary" id="account-confirm">Sign in</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script src="/app.js"></script>
+    <script type="module" src="/accounts.js"></script>
   </body>
 </html>

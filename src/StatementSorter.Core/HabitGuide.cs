@@ -125,6 +125,40 @@ public static class HabitGuide
         return (int)decimal.Ceiling(target / monthlyPace);
     }
 
+    public static decimal PaceAfterOneOffs(decimal leftOver, decimal oneOffSpent, int periodDays)
+    {
+        if (oneOffSpent < 0)
+            oneOffSpent = 0;
+        return MonthlyPace(leftOver + oneOffSpent, periodDays);
+    }
+
+    public static string? Around(DateOnly start, decimal needed, decimal monthlyPace)
+    {
+        if (needed <= 0 || monthlyPace <= 0)
+            return null;
+
+        var culture = CultureInfo.GetCultureInfo("en-US");
+        var months = needed / monthlyPace;
+        if (months < 1m)
+        {
+            var days = (int)Math.Max(1, decimal.Ceiling(months * 30m));
+            if (days < 14)
+                return start.AddDays(days).ToString("MMM d, yyyy", culture);
+
+            var weeks = (int)decimal.Ceiling(days / 7m);
+            return start.AddDays(weeks * 7).ToString("MMM d, yyyy", culture);
+        }
+
+        var whole = (int)decimal.Ceiling(months);
+        if (whole >= 24)
+        {
+            var years = (int)decimal.Ceiling(whole / 12m);
+            return start.AddYears(years).ToString("MMMM yyyy", culture);
+        }
+
+        return start.AddMonths(whole).ToString("MMMM yyyy", culture);
+    }
+
     private static List<(string Category, decimal Spent)> SpendingByCategory(IReadOnlyList<Transaction> transactions)
     {
         return transactions

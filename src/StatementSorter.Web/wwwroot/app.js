@@ -28,6 +28,13 @@ const savingsError = document.querySelector("#savings-error");
 const storageKey = "statement-sorter-goals";
 const savingsKey = "statement-sorter-savings";
 const capsKey = "statement-sorter-caps";
+const oneOffKey = "statement-sorter-one-offs";
+const accountBridge = {
+  applying: false,
+  timer: 0,
+  signedIn: () => false,
+  scheduleSave: () => {},
+};
 
 let current = null;
 let previous = null;
@@ -35,6 +42,7 @@ let activeCategory = "all";
 let goals = loadGoals();
 let savingsTotal = loadSavings(goals);
 let caps = loadCaps();
+let oneOffs = loadOneOffs();
 let editingId = null;
 const hadLegacySavings = goals.some((goal) => goal.legacySaved > 0);
 goals = goals.map(({ legacySaved, ...goal }) => goal);
@@ -253,7 +261,8 @@ function render() {
 function renderInsights() {
   const list = document.querySelector("#insights");
   list.replaceChildren();
-  for (const insight of [...current.habits.insights, ...capInsights()]) {
+  const insights = current.habits.insights.map(adjustPaceInsight);
+  for (const insight of [...insights, ...capInsights()]) {
     const card = document.createElement("article");
     const title = document.createElement("p");
     title.className = "insight-title";
@@ -275,8 +284,8 @@ function renderComparison() {
   section.hidden = false;
   document.querySelector("#compare-range").textContent =
     `${dateSpan(previous.transactions)}. Both files are stretched to 30 days, so a shorter export doesn't look cheaper.`;
-  const nowPace = monthlyPace(current.totalSpent, current.habits.periodDays);
-  const thenPace = monthlyPace(previous.totalSpent, previous.habits.periodDays);
+  const nowPace = monthlyPace(recurringSpend(current), current.habits.periodDays);
+  const thenPace = monthlyPace(recurringSpend(previous), previous.habits.periodDays);
   const overall = roundMoney(nowPace - thenPace);
   document.querySelector("#compare-overall").textContent = Math.abs(overall) < 1
     ? "Overall spending is about the same."
@@ -289,13 +298,31 @@ function renderComparison() {
     const item = document.createElement("li");
     item.textContent = "No category moved by a dollar or more.";
     list.append(item);
-    return;
+  } else {
+    for (const change of changes) {
+      const item = document.createElement("li");
+      item.className = change.delta > 0 ? "up" : "down";
+      const direction = change.delta > 0 ? "up" : "down";
+      item.textContent = `${change.category} is ${direction} ${money.format(Math.abs(change.delta))} every 30 days.`;
+      list.append(item);
+    }
   }
-  for (const change of changes) {
+  renderRepeats();
+}
+
+function renderRepeats() {
+  const heading = document.querySelector("#repeat-heading");
+  const list = document.querySelector("#repeat-list");
+  const empty = document.querySelector("#repeat-empty");
+  heading.hidden = false;
+  list.replaceChildren();
+  const repeats = repeatCharges();
+  empty.hidden = repeats.length > 0;
+  list.hidden = repeats.length === 0;
+  for (const repeat of repeats) {
     const item = document.createElement("li");
-    item.className = change.delta > 0 ? "up" : "down";
-    const direction = change.delta > 0 ? "up" : "down";
-    item.textContent = `${change.category} is ${direction} ${money.format(Math.abs(change.delta))} every 30 days.`;
+    const closeness = repeat.exact ? "at" : "around";
+    item.textContent = `${repeat.merchant} came back ${closeness} ${money.format(repeat.amount)}.`;
     list.append(item);
   }
 }
@@ -353,7 +380,7 @@ function categoryWithCap(button, total) {
 function capStatus(total) {
   const cap = caps[total.category];
   if (!(cap >= 0) || caps[total.category] === undefined) return null;
-  const measured = measureCap(total.spent, current.habits.periodDays, cap);
+  const measured = measureCap(recurringCategorySpent(current, total.category), current.habits.periodDays, cap);
   const status = document.createElement("p");
   status.className = measured.overBy > 0 ? "cap-status over" : "cap-status under";
   status.textContent = measured.overBy > 0
@@ -413,6 +440,7 @@ function renderTable() {
   body.replaceChildren();
   for (const transaction of rows) {
     const row = document.createElement("tr");
+    if (oneOffs.has(txnKey(transaction))) row.classList.add("is-one-off");
     row.append(
       cell(formatDate(transaction.date)),
       descriptionCell(transaction),
@@ -442,7 +470,39 @@ function descriptionCell(transaction) {
   source.className = "source";
   source.textContent = sourceLabel(transaction);
   td.append(source);
+  if (canMarkOneOff(transaction)) td.append(oneOffControl(transaction));
   return td;
+}
+
+function oneOffControl(transaction) {
+  const marked = oneOffs.has(txnKey(transaction));
+  const wrap = document.createElement("span");
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "text-btn one-off-toggle";
+  toggle.setAttribute("aria-pressed", String(marked));
+  toggle.textContent = marked ? "Undo one-off" : "One-off";
+  toggle.setAttribute(
+    "aria-label",
+    marked
+      ? `Count ${transaction.description} in the monthly pace`
+      : `Mark ${transaction.description} as a one-off`,
+  );
+  toggle.addEventListener("click", () => {
+    const key = txnKey(transaction);
+    if (oneOffs.has(key)) oneOffs.delete(key);
+    else oneOffs.add(key);
+    saveOneOffs();
+    render();
+  });
+  wrap.append(toggle);
+  if (marked) {
+    const note = document.createElement("span");
+    note.className = "one-off-note";
+    note.textContent = "Left out of the 30-day pace.";
+    wrap.append(note);
+  }
+  return wrap;
 }
 
 function amountCell(amount) {
@@ -524,12 +584,143 @@ function measureCap(spent, days, cap) {
   return { monthly, overBy: roundMoney(monthly - cap) };
 }
 
+function adjustPaceInsight(insight) {
+  const aside = oneOffTotal(current);
+  if (!(aside > 0)) return insight;
+  if (insight.title !== "Left to save" && insight.title !== "Spending ran ahead" && insight.title !== "Even for this period") {
+    return insight;
+  }
+  const days = current.habits.periodDays;
+  const dayLabel = days === 1 ? "1 day" : `${days} days`;
+  const left = roundMoney(Number(current.habits.leftOver) + aside);
+  const pace = monthlyPace(left, days);
+  const asideLabel = `${money.format(aside)} in one-off charges stays in this statement and is left out of the pace`;
+  if (left > 0) {
+    return {
+      title: "Left to save",
+      detail: `${money.format(Number(current.habits.leftOver))} was left after spending across ${dayLabel}. ${asideLabel}. About ${money.format(pace)} every 30 days can go toward a goal.`,
+    };
+  }
+  if (left < 0) {
+    return {
+      title: "Spending ran ahead",
+      detail: `Spending was ${money.format(-left)} more than income over ${dayLabel} after the one-off charges were set aside. Nothing is left for a goal until that gap closes.`,
+    };
+  }
+  return {
+    title: "Even for this period",
+    detail: `After setting ${money.format(aside)} aside as a one-off, spending matches income over ${dayLabel}, so this pace doesn't fund a goal yet.`,
+  };
+}
+
+function savingPace(result = current) {
+  if (!result || !result.habits) return 0;
+  const left = roundMoney(Number(result.habits.leftOver) + oneOffTotal(result));
+  return monthlyPace(left, result.habits.periodDays);
+}
+
+function recurringSpend(result) {
+  return roundMoney(Math.max(0, Number(result.totalSpent) - oneOffTotal(result)));
+}
+
+function oneOffTotal(result) {
+  if (!result) return 0;
+  let sum = 0;
+  for (const transaction of result.transactions) {
+    if (!canMarkOneOff(transaction) || !oneOffs.has(txnKey(transaction))) continue;
+    sum += -Number(transaction.amount);
+  }
+  return roundMoney(sum);
+}
+
+function recurringCategorySpent(result, category) {
+  if (!result) return 0;
+  const total = result.totals.find((item) => item.category.toLowerCase() === category.toLowerCase());
+  const base = total ? Number(total.spent) : 0;
+  let aside = 0;
+  for (const transaction of result.transactions) {
+    if (transaction.category.toLowerCase() !== category.toLowerCase()) continue;
+    if (!canMarkOneOff(transaction) || !oneOffs.has(txnKey(transaction))) continue;
+    aside += -Number(transaction.amount);
+  }
+  return roundMoney(Math.max(0, base - aside));
+}
+
+function canMarkOneOff(transaction) {
+  return Number(transaction.amount) < 0 && !isTransferOrIncome(transaction.category);
+}
+
+function txnKey(transaction) {
+  return `${transaction.date}|${transaction.lineNumber}|${Number(transaction.amount).toFixed(2)}|${transaction.description}`;
+}
+
+function repeatCharges() {
+  if (!current || !previous) return [];
+  const now = merchantSpend(current);
+  const then = merchantSpend(previous);
+  const matches = [];
+  for (const [key, later] of now) {
+    const earlier = then.get(key);
+    if (!earlier) continue;
+    const delta = roundMoney(Math.abs(later.amount - earlier.amount));
+    if (delta >= 1) continue;
+    matches.push({ merchant: later.display, amount: later.amount, exact: delta === 0 });
+  }
+  matches.sort((a, b) => b.amount - a.amount || a.merchant.localeCompare(b.merchant));
+  return matches;
+}
+
+function merchantSpend(result) {
+  const groups = new Map();
+  for (const transaction of result.transactions) {
+    if (!canMarkOneOff(transaction)) continue;
+    const key = merchantKey(transaction.description);
+    if (!key) continue;
+    const amount = roundMoney(-Number(transaction.amount));
+    const existing = groups.get(key);
+    if (existing) existing.amount = roundMoney(existing.amount + amount);
+    else groups.set(key, { amount, display: merchantDisplay(transaction.description) });
+  }
+  return groups;
+}
+
+function merchantKey(description) {
+  let text = String(description).toLowerCase();
+  const cut = text.search(/[*#]/);
+  if (cut > 0) text = text.slice(0, cut);
+  return text.replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function merchantDisplay(description) {
+  let text = String(description);
+  const cut = text.search(/[*#]/);
+  if (cut > 0) text = text.slice(0, cut);
+  return text.replace(/[\s,.;]+$/g, "").trim();
+}
+
+function loadOneOffs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(oneOffKey) || "[]");
+    return new Set(Array.isArray(saved) ? saved.filter((key) => typeof key === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveOneOffs() {
+  if (accountBridge.applying) return;
+  if (accountBridge.signedIn()) {
+    accountBridge.scheduleSave();
+    return;
+  }
+  localStorage.setItem(oneOffKey, JSON.stringify([...oneOffs]));
+}
+
 function freedByCaps() {
   if (!current) return 0;
   let freed = 0;
   for (const [category, cap] of Object.entries(caps)) {
-    const total = current.totals.find((item) => item.category === category);
-    const spent = total ? total.spent : 0;
+    const spent = recurringCategorySpent(current, category);
     const over = measureCap(spent, current.habits.periodDays, cap).overBy;
     if (over > 0) freed += over;
   }
@@ -540,8 +731,7 @@ function capInsights() {
   if (!current) return [];
   const cards = [];
   for (const [category, cap] of Object.entries(caps)) {
-    const total = current.totals.find((item) => item.category === category);
-    const spent = total ? total.spent : 0;
+    const spent = recurringCategorySpent(current, category);
     const measured = measureCap(spent, current.habits.periodDays, cap);
     if (measured.overBy > 0) {
       cards.push({
@@ -576,8 +766,8 @@ function categoryChanges() {
     const counts = (total) => total && total.spent > 0 && !isTransferOrIncome(total.category);
     if (!counts(now) && !counts(then)) continue;
     const delta = roundMoney(
-      monthlyPace(now ? now.spent : 0, current.habits.periodDays) -
-      monthlyPace(then ? then.spent : 0, previous.habits.periodDays),
+      monthlyPace(now ? recurringCategorySpent(current, now.category) : 0, current.habits.periodDays) -
+      monthlyPace(then ? recurringCategorySpent(previous, then.category) : 0, previous.habits.periodDays),
     );
     if (Math.abs(delta) < 1) continue;
     changes.push({ category, delta });
@@ -606,6 +796,11 @@ function loadCaps() {
 }
 
 function saveCaps() {
+  if (accountBridge.applying) return;
+  if (accountBridge.signedIn()) {
+    accountBridge.scheduleSave();
+    return;
+  }
   localStorage.setItem(capsKey, JSON.stringify(caps));
 }
 
@@ -820,9 +1015,10 @@ function formatWait(plan, plans) {
       : "Load a statement to estimate how long this will take.";
   }
 
-  const pace = Number(current.habits.monthlyPace);
+  const pace = savingPace();
   const freed = freedByCaps();
-  const base = describePace(throughHere, pace);
+  const start = endDate(current);
+  const base = describePace(throughHere, pace, start);
   const queue = ahead > 0 ? " It waits on the goals above it." : "";
   if (!(freed > 0)) return `${share}${base}${queue}`;
 
@@ -833,26 +1029,56 @@ function formatWait(plan, plans) {
   const capLine = firstOpen && firstOpen.index === index
     ? ` Staying inside the caps frees ${money.format(freed)} every 30 days.`
     : "";
-  const changed = cappedMonths !== null && cappedMonths !== baseMonths ? ` ${describePace(throughHere, cappedPace)}` : "";
+  const changed = cappedMonths !== null && cappedMonths !== baseMonths ? ` ${describePace(throughHere, cappedPace, start)}` : "";
   return `${share}${base}${queue}${capLine}${changed}`;
 }
 
-function describePace(needed, pace) {
+function describePace(needed, pace, startIso) {
   if (!(pace > 0)) return "This statement doesn't leave money to save, so there isn't a timeline yet.";
   const paceLabel = `${money.format(pace)} every 30 days`;
   const months = needed / pace;
+  let sentence;
+  let shift;
   if (months < 1) {
     const days = Math.max(1, Math.ceil(months * 30));
-    if (days < 14) return `About ${days} ${days === 1 ? "day" : "days"} at ${paceLabel}.`;
-    const weeks = Math.ceil(days / 7);
-    return `About ${weeks} weeks at ${paceLabel}.`;
+    if (days < 14) {
+      sentence = `About ${days} ${days === 1 ? "day" : "days"} at ${paceLabel}.`;
+      shift = { days };
+    } else {
+      const weeks = Math.ceil(days / 7);
+      sentence = `About ${weeks} weeks at ${paceLabel}.`;
+      shift = { days: weeks * 7 };
+    }
+  } else {
+    const whole = Math.ceil(months);
+    if (whole >= 24) {
+      const years = Math.ceil(whole / 12);
+      sentence = `About ${years} ${years === 1 ? "year" : "years"} at ${paceLabel}.`;
+      shift = { years };
+    } else {
+      sentence = `About ${whole} ${whole === 1 ? "month" : "months"} at ${paceLabel}.`;
+      shift = { months: whole };
+    }
   }
-  const whole = Math.ceil(months);
-  if (whole >= 24) {
-    const years = Math.ceil(whole / 12);
-    return `About ${years} ${years === 1 ? "year" : "years"} at ${paceLabel}.`;
-  }
-  return `About ${whole} ${whole === 1 ? "month" : "months"} at ${paceLabel}.`;
+  const when = around(startIso, shift);
+  return when ? `${sentence} ${when}` : sentence;
+}
+
+function around(startIso, shift) {
+  if (!startIso) return "";
+  const date = shiftDate(startIso, shift);
+  const label = date.toLocaleDateString("en-US", shift.months || shift.years
+    ? { month: "long", year: "numeric" }
+    : { month: "short", day: "numeric", year: "numeric" });
+  return `Around ${label}.`;
+}
+
+function shiftDate(iso, { days = 0, months = 0, years = 0 }) {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(year + years, month - 1 + months, 1);
+  const last = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  date.setDate(Math.min(day, last) + days);
+  return date;
 }
 
 function parseAmount(raw) {
@@ -905,12 +1131,92 @@ function loadSavings(loadedGoals) {
 }
 
 function saveGoals() {
+  if (accountBridge.applying) return;
+  if (accountBridge.signedIn()) {
+    accountBridge.scheduleSave();
+    return;
+  }
   localStorage.setItem(storageKey, JSON.stringify(goals));
 }
 
 function saveSavings() {
+  if (accountBridge.applying) return;
+  if (accountBridge.signedIn()) {
+    accountBridge.scheduleSave();
+    return;
+  }
   localStorage.setItem(savingsKey, String(savingsTotal));
 }
+
+function readPersonal() {
+  return {
+    goals: goals.map((goal) => ({
+      id: goal.id,
+      name: goal.name,
+      target: goal.target,
+      note: goal.note || "",
+    })),
+    savings: roundMoney(Math.max(0, Number(savingsTotal) || 0)),
+    caps: { ...caps },
+    oneOffs: [...oneOffs],
+  };
+}
+
+function applyPersonal(data) {
+  accountBridge.applying = true;
+  goals = normalizeGoals(data && data.goals);
+  const saved = Number(data && data.savings);
+  savingsTotal = Number.isFinite(saved) && saved > 0 ? roundMoney(saved) : 0;
+  caps = normalizeCaps(data && data.caps);
+  oneOffs = new Set(Array.isArray(data && data.oneOffs) ? data.oneOffs.filter((key) => typeof key === "string") : []);
+  savingsInput.value = savingsTotal > 0 ? savingsTotal.toFixed(2) : "";
+  savingsError.hidden = true;
+  accountBridge.applying = false;
+  renderGoals();
+  if (current) render();
+}
+
+function reloadLocalPersonal() {
+  accountBridge.applying = true;
+  const loaded = loadGoals();
+  goals = loaded.map(({ legacySaved, ...goal }) => goal);
+  savingsTotal = loadSavings(loaded);
+  caps = loadCaps();
+  oneOffs = loadOneOffs();
+  savingsInput.value = savingsTotal > 0 ? savingsTotal.toFixed(2) : "";
+  savingsError.hidden = true;
+  accountBridge.applying = false;
+  renderGoals();
+  if (current) render();
+}
+
+function normalizeGoals(saved) {
+  if (!Array.isArray(saved)) return [];
+  return saved
+    .filter((goal) => goal && typeof goal.name === "string" && Number(goal.target) > 0)
+    .map((goal) => ({
+      id: typeof goal.id === "string" && goal.id ? goal.id : crypto.randomUUID(),
+      name: goal.name,
+      target: Number(goal.target),
+      note: goal.note || "",
+    }));
+}
+
+function normalizeCaps(saved) {
+  if (!saved || Array.isArray(saved) || typeof saved !== "object") return {};
+  const cleaned = {};
+  for (const [category, cap] of Object.entries(saved)) {
+    if (Number(cap) >= 0) cleaned[category] = Number(cap);
+  }
+  return cleaned;
+}
+
+window.statementSorterPersonal = {
+  accountBridge,
+  readPersonal,
+  applyPersonal,
+  reloadLocalPersonal,
+};
 
 if (savingsTotal > 0) savingsInput.value = savingsTotal.toFixed(2);
 renderGoals();

@@ -114,4 +114,49 @@ public class HabitGuideTests
         Assert.Null(HabitGuide.MonthsUntil(100m, -20m));
         Assert.Null(HabitGuide.MonthsUntil(0m, 100m));
     }
+
+    [Fact]
+    public void One_off_spending_comes_back_into_the_pace()
+    {
+        var habits = StatementProcessor.Process(SampleStatement.Csv).Habits;
+
+        Assert.Equal(1169.30m, HabitGuide.PaceAfterOneOffs(habits.LeftOver, 42.18m, habits.PeriodDays));
+        Assert.Equal(habits.MonthlyPace, HabitGuide.PaceAfterOneOffs(habits.LeftOver, -10m, habits.PeriodDays));
+    }
+
+    [Fact]
+    public void Goal_date_counts_forward_from_the_statement_end()
+    {
+        var end = new DateOnly(2024, 2, 2);
+
+        Assert.Equal("June 2024", HabitGuide.Around(end, 4000m, 1128.48m));
+        Assert.Equal("July 2024", HabitGuide.Around(end, 5000m, 1128.48m));
+        Assert.Equal("Feb 5, 2024", HabitGuide.Around(end, 100m, 1128.48m));
+        Assert.Equal("Feb 23, 2024", HabitGuide.Around(end, 600m, 1128.48m));
+        Assert.Equal("February 2026", HabitGuide.Around(end, 27083.52m, 1128.48m));
+        Assert.Null(HabitGuide.Around(end, 0m, 1128.48m));
+        Assert.Null(HabitGuide.Around(end, 100m, 0m));
+    }
+
+    [Fact]
+    public void Same_merchant_at_about_the_same_amount_comes_back()
+    {
+        var later = StatementProcessor.Process(SampleStatement.Csv);
+        var earlier = StatementProcessor.Process(SampleStatement.EarlierCsv);
+        var repeats = RepeatCharges.SameAmount(later, earlier);
+
+        var rent = Assert.Single(repeats, charge => charge.Merchant == "RENT PAYMENT");
+        var netflix = Assert.Single(repeats, charge => charge.Merchant == "NETFLIX.COM");
+
+        Assert.Equal(1850m, rent.Amount);
+        Assert.True(rent.Exact);
+        Assert.Equal(15.49m, netflix.Amount);
+        Assert.True(netflix.Exact);
+        Assert.Equal(repeats[0], rent);
+        Assert.DoesNotContain(repeats, charge => charge.Merchant.Contains("WHOLE", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(repeats, charge => charge.Merchant.Contains("STARBUCKS", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(repeats, charge => charge.Merchant.Contains("SHELL", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(repeats, charge => charge.Merchant.Contains("AMAZON", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(repeats, charge => charge.Merchant.Contains("PAYROLL", StringComparison.OrdinalIgnoreCase));
+    }
 }

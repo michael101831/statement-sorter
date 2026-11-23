@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// The browser talks to Firestore directly. These rules are what keep one
+// signed-in person from reading or writing someone else's notes.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      allow read, create, update: if request.auth != null && request.auth.uid == uid;
+      allow delete: if false;
+    }
+  }
+}
